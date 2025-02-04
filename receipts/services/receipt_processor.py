@@ -1,3 +1,5 @@
+import re
+
 import requests
 import os
 import logging
@@ -42,9 +44,20 @@ def process_receipt_image(image_path):
 
         parsed_text = result['ParsedResults'][0]['ParsedText']
 
+        # Add this cleaning step
+        cleaned_text = (
+            parsed_text
+            .replace('\t', ' ')          # Replace tabs with spaces
+            .replace('\r', '')           # Remove carriage returns
+            .replace('\\', '\\\\')       # Escape backslashes
+            .replace('\n', '\\n')        # Escape newlines
+            .replace('"', '\\"')         # Escape double quotes
+        )
+
+
         # Basic structure extraction (customize based on your needs)
         return {
-            "raw_text": parsed_text,
+            "raw_text": cleaned_text,
             "items": extract_items(parsed_text),
             "total": extract_total(parsed_text),
             "merchant": extract_merchant(parsed_text)
@@ -55,8 +68,40 @@ def process_receipt_image(image_path):
         raise
 
 def extract_items(text):
-    """Simple item extraction logic (customize this)"""
-    return [line.strip() for line in text.split('\r\n') if '$' in line or '€' in line]
+    """Improved item extraction with price pairing"""
+    items = []
+    for line in text.split('\r\n'):
+        # Skip non-item lines
+        if any(keyword in line.lower() for keyword in ['subtotal', 'tax', 'total', 'coupon', 'change due']):
+            continue
+
+        # Find all potential prices in the line
+        prices = re.findall(r'\b\d+\.\d{2}\b', line)
+        if not prices:
+            continue
+
+        # Use last price in line as item price
+        price = prices[-1]
+
+        # Clean up line components
+        parts = []
+        for part in line.split('\t'):
+            part = part.strip()
+            # Remove product codes and flags
+            if not any([
+                re.match(r'^\d{10,}$', part),  # Long numeric codes
+                part in ['X', 'F', 'I', 'N'],  # Single-letter flags
+                re.match(r'^\d+\.\d{2}$', part) and part != price  # Other prices
+            ]):
+                parts.append(part)
+
+        # Rebuild item string
+        clean_line = ' '.join(parts)
+        # Remove any remaining price markers except the last one
+        clean_line = re.sub(r'\s\d+\.\d{2}(?!.*\d+\.\d{2})', '', clean_line)
+        items.append(f"{clean_line} {price}")
+
+    return items
 
 def extract_total(text):
     """Simple total extraction (customize this)"""
